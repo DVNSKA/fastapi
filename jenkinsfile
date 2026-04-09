@@ -1,13 +1,43 @@
 pipeline {
-    agent any
+
+    agent {
+        kubernetes {
+            label 'jenkins-agent'
+            yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: jenkins-agent
+spec:
+  containers:
+  - name: docker
+    image: docker:24-dind
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: docker-storage
+      mountPath: /var/lib/docker
+  - name: jnlp
+    image: jenkins/inbound-agent:latest
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+  volumes:
+  - name: docker-storage
+    emptyDir: {}
+"""
+        }
+    }
 
     environment {
-        DOCKER_IMAGE     = "YOUR_DOCKERHUB_USERNAME/fastapi-app"
+        DOCKER_IMAGE     = "DVNSKA/fastapi-app"
         DOCKER_TAG       = "v${BUILD_NUMBER}"
-        GIT_REPO         = "https://github.com/YOUR_USERNAME/YOUR_REPO.git"
+        GIT_REPO         = "https://github.com/YOUR_GITHUB_USERNAME/fastapi.git"
         GIT_BRANCH       = "main"
-        DEPLOYMENT_FILE  = "k8s/deployment.yaml"
-        GIT_USER_EMAIL   = "jenkins@yourdomain.com"
+        DEPLOYMENT_FILE  = "k8/deployment.yaml"
+        GIT_USER_EMAIL   = "abhirampabbisetty4@gmail.com"
         GIT_USER_NAME    = "Jenkins CI"
     }
 
@@ -27,22 +57,22 @@ pipeline {
         // ✅ STAGE 2: BUILD DOCKER IMAGE
         stage('Build Docker Image') {
             steps {
-                echo '🔨 Building Docker image...'
-                script {
+                container('docker') {
+                    echo '🔨 Building Docker image...'
                     sh """
                         docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
                         docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest
                     """
+                    echo "✅ Built: ${DOCKER_IMAGE}:${DOCKER_TAG}"
                 }
-                echo "✅ Built image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
             }
         }
 
         // ✅ STAGE 3: PUSH TO DOCKER HUB
         stage('Push Docker Image') {
             steps {
-                echo '📤 Pushing image to Docker Hub...'
-                script {
+                container('docker') {
+                    echo '📤 Pushing to Docker Hub...'
                     withCredentials([usernamePassword(
                         credentialsId: 'docker-hub-creds',
                         usernameVariable: 'DOCKER_USER',
@@ -52,43 +82,39 @@ pipeline {
                             echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
                             docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
                             docker push ${DOCKER_IMAGE}:latest
+                            docker logout
                         """
                     }
+                    echo "✅ Pushed: ${DOCKER_IMAGE}:${DOCKER_TAG}"
                 }
-                echo "✅ Pushed: ${DOCKER_IMAGE}:${DOCKER_TAG}"
             }
         }
 
-        // ✅ STAGE 4: UPDATE deployment.yaml AND PUSH TO GIT
-        stage('Update Deployment YAML & Push to Git') {
+        // ✅ STAGE 4: UPDATE deployment.yaml & PUSH TO GIT
+        stage('Update Deployment & Push to Git') {
             steps {
-                echo '📝 Updating image tag in deployment.yaml...'
-                script {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'git-creds',
-                        usernameVariable: 'GIT_USER',
-                        passwordVariable: 'GIT_PASS'
-                    )]) {
-                        sh """
-                            # Configure git
-                            git config user.email "${GIT_USER_EMAIL}"
-                            git config user.name "${GIT_USER_NAME}"
+                echo '📝 Updating image in deployment.yaml...'
+                withCredentials([usernamePassword(
+                    credentialsId: 'git-creds',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_PASS'
+                )]) {
+                    sh """
+                        git config user.email "${GIT_USER_EMAIL}"
+                        git config user.name "${GIT_USER_NAME}"
 
-                            # Replace image tag in deployment.yaml using sed
-                            sed -i 's|image: ${DOCKER_IMAGE}:.*|image: ${DOCKER_IMAGE}:${DOCKER_TAG}|g' ${DEPLOYMENT_FILE}
+                        # Replace image line in deployment.yaml
+                        sed -i 's|image: ${DOCKER_IMAGE}:.*|image: ${DOCKER_IMAGE}:${DOCKER_TAG}|g' ${DEPLOYMENT_FILE}
 
-                            # Verify the change
-                            echo "Updated deployment.yaml:"
-                            grep "image:" ${DEPLOYMENT_FILE}
+                        echo "--- Verify change ---"
+                        grep "image:" ${DEPLOYMENT_FILE}
 
-                            # Stage, commit and push
-                            git add ${DEPLOYMENT_FILE}
-                            git commit -m "CI: Update image to ${DOCKER_IMAGE}:${DOCKER_TAG} [skip ci]"
-                            git push https://${GIT_USER}:${GIT_PASS}@github.com/YOUR_USERNAME/YOUR_REPO.git ${GIT_BRANCH}
-                        """
-                    }
+                        git add ${DEPLOYMENT_FILE}
+                        git commit -m "CI: Update image to ${DOCKER_IMAGE}:${DOCKER_TAG} [skip ci]"
+                        git push https://${GIT_USER}:${GIT_PASS}@github.com/DVNSKA/fastapi.git ${GIT_BRANCH}
+                    """
                 }
-                echo '✅ Deployment YAML updated and pushed to Git!'
+                echo '✅ deployment.yaml updated and pushed!'
             }
         }
     }
@@ -98,10 +124,11 @@ pipeline {
             echo '🎉 Pipeline completed successfully!'
         }
         failure {
-            echo '❌ Pipeline failed. Check logs above.'
+            echo '❌ Pipeline failed! Check console logs.'
         }
         always {
-            sh 'docker logout || true'
+            echo '🧹 Cleaning up workspace...'
+            cleanWs()
         }
     }
 }
