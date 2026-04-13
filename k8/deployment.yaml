@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: fastapi-app
-        image: YOUR_DOCKERHUB_USERNAME/fastapi-app:IMAGE_TAG   # <-- Jenkins will replace this line
+        image: dvnska/fastapi-app:latest # <-- Jenkins will replace this line
         ports:
         - containerPort: 8000
 ---
