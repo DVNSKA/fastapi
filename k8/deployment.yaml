@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: fastapi-app
-        image: dvnska/fastapi-app:v12
+        image: dvnska/fastapi-app:v13
         ports:
         - containerPort: 8000
 ---
